@@ -19,9 +19,11 @@ costly than a false alarm.
 
 ## Data
 
-- **Source:** Kaggle — Bank Customer Churn Prediction Dataset
+- **Source:** [Bank Customer Churn Prediction](https://www.kaggle.com/datasets/saurabhbadole/bank-customer-churn-prediction-dataset) — Kaggle
+- **License:** CC BY-NC-ND 4.0 — dataset not included in this repo
 - **Size:** 10,000 observations, 13 predictor variables + churn indicator
-- **Class distribution:** ~80% stayed, ~20% churned (imbalanced)
+- **Setup:** Download the dataset from Kaggle and place `Churn_Modelling.csv`
+  in a `data/` folder in the project root before running the analysis.
 
 **Preprocessing steps:**
 - Removed non-predictive identifiers (RowNumber, CustomerID, Surname)
