@@ -1,0 +1,425 @@
+---
+title: "STAT376 Group Project"
+author: "Evan Scheuermann, Jake Scheidelman, Jack Tamburino"
+format: pdf
+editor: visual
+---
+
+# Machine Learning in Customer Churn Prediction
+
+## Comparative Analysis of Naive Bayes, Random Forest, and an Ensemble
+
+```{r}
+#| include: false
+
+library(caret)
+library(rpart)
+library(skimr)
+library(dplyr)
+library(randomForest)
+library(summarytools)
+library(caretEnsemble)
+library(pROC)
+library(ggplot2)
+library(tidyr)
+library(naivebayes)
+library(gmodels)
+library(party)
+library(partykit)
+library(stargazer)
+```
+
+## Data Preparation
+
+We start by importing and analyzing the raw variables.
+
+```{r}
+#| include: false
+
+cchurn_data <- read.csv("C:/Users/evans/OneDrive/Documents/St John Fisher Documents/Spring 2026/Machine Learning/Group Project/dataset_1/Churn_Modelling.csv")
+```
+
+```{r}
+#| output: false
+
+str(cchurn_data)
+summary(cchurn_data)
+```
+
+We see that our data has several variables that serve no purpose in prediction and will cause issues if not removed. These variables are RowNumber, Surname, and CustomerId. In addition, we must change the data types for Geography, Gender, HasCrCard, IsActiveMember, and Exited to be factor variables in order to implement our machine learning algorithms. Since the data does not have any missing or duplicate values, we do not need to take any action to remove or impute rows containing NA values or duplicates.
+
+```{r}
+#| output: false
+
+cchurn_data_clean <- cchurn_data %>%
+  mutate(
+    Geography = as.factor(Geography),
+    Gender = as.factor(Gender),
+    HasCrCard = as.factor(HasCrCard),
+    IsActiveMember = as.factor(IsActiveMember),
+    Exited = as.factor(Exited),
+    Exited = factor(Exited, labels = make.names(levels(Exited)))
+  ) %>%
+  select(
+    -RowNumber, -Surname, -CustomerId
+  )
+str(cchurn_data_clean)
+```
+
+Now that we have cleaned our data, we want to identify any variables that may be highly correlated with other variables to remove these redundancies.
+
+```{r}
+findCorrelation(cor(cchurn_data_clean[, !names(cchurn_data_clean) %in%
+                                        c("Geography", "Gender",
+                                          "HasCrCard", "IsActiveMember",
+                                          "Exited")]), cutoff = 0.80) 
+```
+
+There does not appear to be any highly correlated variables in our numeric data, so we can move on to splitting up the data.
+
+## Random Forest
+
+### Training
+
+We start by splitting the cleaned data into training and testing data.
+
+```{r}
+set.seed(235)
+trainIndex <- createDataPartition(cchurn_data_clean$Exited,
+                                  p = .8, list = FALSE, times = 1)
+
+train_data <- cchurn_data_clean[trainIndex, ]
+test_data  <- cchurn_data_clean[-trainIndex, ]
+train_data$Exited <- relevel(train_data$Exited, ref = "X1")
+test_data$Exited  <- relevel(test_data$Exited,  ref = "X1")
+train_data_ens <- train_data
+test_data_ens  <- test_data
+```
+
+Now that we have training and testing data, we need to set up our training parameters for the random forest algorithm. We will use repeated cross-validation in order to ensure our model is reliable and stable. Although random forests are known to handle noisy data well, repeated cross-validation will help mitigate issues with noise even more.
+
+We will create a tuning grid, which allows us to test different numbers of variables at splits in our decision trees. Smaller values for the mtry parameter reduce correlation between trees while larger values reduce potential bias, so by testing multiple different values for mtry we can identify the most effective setting.
+
+```{r}
+rfctrl <- trainControl(method = "repeatedcv",
+                       repeats = 3,
+                       classProbs = TRUE,
+                       savePredictions = "final",
+                       summaryFunction = twoClassSummary,
+                       sampling = "down")
+
+grid_rf <- expand.grid(.mtry = seq(1, ncol(train_data) - 1, by = 3),
+                       .splitrule = "gini",
+                       .min.node.size = c(1, 5, 10))
+```
+
+```{r}
+#| include: false
+
+key_vars <- train_data %>%
+  select(Age, Balance, CreditScore, EstimatedSalary, Exited) %>%
+  pivot_longer(cols = -Exited, names_to = "Variable", values_to = "Value")
+
+ggplot(key_vars, aes(x = Value, fill = Exited)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~ Variable, scales = "free") +
+  scale_fill_manual(values = c("steelblue", "tomato"),
+                    labels = c("Did Not Churn", "Churned")) +
+  labs(
+    title = "Distribution of Key Predictors by Churn Status",
+    x = "Value",
+    y = "Density",
+    fill = "Churn Status"
+  ) +
+  theme_minimal()
+```
+
+Now that our data has been processed for the random forest algorithm, we can train our model.
+
+```{r}
+rf <- train(Exited ~ .,
+            data = train_data,
+            method = "ranger",
+            trControl = rfctrl,
+            tuneGrid = grid_rf,
+            importance = "impurity",
+            metric = "Sens")
+```
+
+### Analyzing the Random Forest Model
+
+With our model trained, we can now evaluate its performance and see which of our tuning parameters provided the best results.
+
+```{r}
+#| include: false
+
+summary(rf)
+rf$bestTune
+predictions <- predict(rf, newdata = test_data)
+```
+
+```{r}
+#| echo: false
+
+confusionMatrix(predictions, test_data$Exited, positive = "X1")
+rfc <- confusionMatrix(predictions, test_data$Exited, positive = "X1")
+```
+
+We see that setting mtry equal to four yielded the most accurate results with an accuracy of 86.79% and a kappa of 0.5209, indicating that the algorithm was fairly accurate. We also see that it had 96.86% specificity, meaning that it almost always correctly identified which customers were not going to churn. In contrast, sensitivity was about 47.42%, indicating that it correctly identified less than half of the customers that were going to churn.
+
+Applied to a business context, these results are useful in the sense that they provide valuable insight into who is not going to churn. This means that the business will not spend an unnecessary amount of resources trying to retain customers that will stay anyways. The downside to this model is that it fails to predict a little over half of the customers who will end up leaving, which is a fair amount of business that could have potentially been saved. If customer retention is costly (likely the case with a bank), it is likely better to have the model predict with higher specificity, such as with our model. Although if this business values identifying as many potential churners as possible, then the model could be tuned to improve this metric instead. Regardless, the random forest still predicts better than the no information rate (NIR), with the lower bound of its confidence interval sitting over 5% above the NIR. Thus, it is providing valuable information to the business, which would help save money and retain customers more efficiently.
+
+Analyzing our model further, we find that a select few variables are much more important in this algorithm than others. Age is by far the most important, followed by balance, estimated salary, credit score, and number of products.
+
+We plot variable importance to give a clearer visual ranking of which predictors the random forest relied on most when making its decisions.
+
+```{r}
+#| echo: false
+
+var_imp <- varImp(rf)$importance %>%
+  tibble::rownames_to_column("Variable") %>%
+  arrange(desc(Overall))
+
+ggplot(var_imp, aes(x = reorder(Variable, Overall), y = Overall, fill = Overall)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_gradient(low = "steelblue", high = "tomato") +
+  labs(
+    title = "Variable Importance — Random Forest",
+    x = "Variable",
+    y = "Importance Score"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+Finally, by creating a Receiver Operating Characteristic (ROC) curve, we can visualize the model's trade-off between specificity and sensitivity.
+
+```{r}
+#| echo: false
+
+probs <- predict(rf, newdata = test_data, type = "prob")[ ,2]
+roc_obj <- roc(test_data$Exited, probs)
+print(auc(roc_obj))
+plot(roc_obj, print.thres = "best")
+```
+
+We see that the area under the ROC curve is 0.8686, indicating that the random forest did fairly well. The ROC curve shows that we can choose different combinations of specificity and sensitivity, depending on how important either is for a given context. In this case, we might choose to sacrifice some specificity in exchange for greater sensitivity if retaining more customers is more valuable than the cost of wasting more money on customers that would stay anyways. The right choice strikes a balance between these two metrics, optimizing potential profits for the business.
+
+We visualize the confusion matrix as a heatmap to make it easier to see at a glance exactly how many predictions the model got right and wrong for each class.
+
+```{r}
+#| echo: false
+
+cm <- confusionMatrix(predictions, test_data$Exited, positive = "X1")
+cm_df <- as.data.frame(cm$table)
+colnames(cm_df) <- c("Predicted", "Actual", "Count")
+
+ggplot(cm_df, aes(x = Actual, y = Predicted, fill = Count)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Count), size = 6, fontface = "bold") +
+  scale_fill_gradient(low = "lightyellow", high = "tomato") +
+  scale_x_discrete(labels = c("X0" = "Did Not Churn", "X1" = "Churned")) +
+  scale_y_discrete(labels = c("X0" = "Did Not Churn", "X1" = "Churned")) +
+  labs(
+    title = "Confusion Matrix Heatmap",
+    x = "Actual",
+    y = "Predicted",
+    fill = "Count"
+  ) +
+  theme_minimal() +
+  theme(axis.text = element_text(size = 11))
+```
+
+### Issues with the Random Forest
+
+Although the random forest model displayed relatively accurate results, a major issue with this algorithm is that it is hard to explain. This is important in certain contexts, but if the business does not care about seeing exactly how decisions are made (beyond variable importance), it would probably prefer the increased accuracy that this algorithm tends to provide.
+
+## Naive Bayes
+
+```{r}
+#| include: false
+
+bank_raw <- cchurn_data
+
+bank_raw$Geography <- factor(bank_raw$Geography)
+bank_raw$Gender    <- factor(bank_raw$Gender)
+bank_raw$Exited    <- factor(bank_raw$Exited) 
+# remove ID-like columns (same idea as removing raw text in SMS example)
+bank_raw <- bank_raw[, !(names(bank_raw) %in% c("RowNumber","CustomerId","Surname"))]
+
+# check class balance
+table(bank_raw$Exited)
+prop.table(table(bank_raw$Exited))
+set.seed(123)
+
+# 70/30 split
+train_index <- 1:floor(0.7 * nrow(bank_raw))
+
+bank_train <- bank_raw[train_index, ]
+bank_test  <- bank_raw[-train_index, ]
+
+# labels (parallel to sms_train_labels / sms_test_labels)
+train_labels <- bank_train$Exited
+test_labels  <- bank_test$Exited
+# remove target variable from predictors
+bank_train_x <- bank_train[, names(bank_train) != "Exited"]
+bank_test_x  <- bank_test[, names(bank_test) != "Exited"]
+
+nb_model <- naive_bayes(bank_train_x, train_labels, laplace = 1)
+nb_model
+
+# class predictions
+test_pred <- predict(nb_model, bank_test_x)
+
+# probabilistic predictions
+test_prob <- predict(nb_model, bank_test_x, type = "prob")
+
+head(test_prob)
+
+CrossTable(test_pred, test_labels,
+           prop.chisq = FALSE,
+           prop.c = FALSE,
+           prop.r = FALSE,
+           dnn = c("predicted", "actual"))
+actual <- as.numeric(test_labels) - 1
+pred   <- as.numeric(test_pred) - 1
+
+TP <- sum(pred == 1 & actual == 1)
+TN <- sum(pred == 0 & actual == 0)
+FP <- sum(pred == 1 & actual == 0)
+FN <- sum(pred == 0 & actual == 1)
+
+accuracy  <- (TP + TN) / (TP + TN + FP + FN)
+precision <- TP / (TP + FP)
+recall    <- TP / (TP + FN)
+F1        <- 2 * precision * recall / (precision + recall)
+
+data.frame(accuracy, precision, recall, F1)
+
+results <- cbind(bank_test,
+                 predicted = test_pred,
+                 prob_stay = test_prob[, "0"],
+                 prob_exit = test_prob[, "1"])
+
+head(results)
+
+confusionMatrix(test_pred, test_labels, positive = "1")
+nbc <- confusionMatrix(test_pred, test_labels, positive = "1")
+```
+
+### Training
+
+```{r}
+nbctrl <- trainControl(method = "repeatedcv",
+                     repeats = 3,
+                     summaryFunction = twoClassSummary,
+                     classProbs = TRUE,
+                     savePredictions = "final",
+                     sampling = "down")
+
+nb_grid <- expand.grid(usekernel = c(TRUE, FALSE),
+                       laplace = c(0, .5, 1),
+                       adjust = c(.5, 1, 1.5))
+```
+
+```{r}
+nb2 <- train(Exited ~ .,
+             data = train_data,
+             method = "naive_bayes",
+             metric = "Sens",
+             tuneGrid = nb_grid,
+             trControl = nbctrl)
+```
+
+### Results
+
+```{r}
+#| echo: false
+
+# summary(nb2)
+test_pred2 <- predict(nb2, newdata = test_data)
+nbc2 <- confusionMatrix(test_pred2, test_data$Exited, positive = "X1")
+print(nbc2)
+```
+
+The project begins by loading the banking dataset and doing some standard preprocessing. Categorical variables — Geography, Gender, and Exited — are converted to factors so R treats them correctly, and meaningless identifier columns like RowNumber, CustomerId, and Surname are dropped. A quick class balance check reveals the dataset is heavily skewed: roughly 80% of customers stayed and 20% churned. This imbalance is important context for everything that follows, since it gives the model a natural bias toward predicting "stay."
+
+The data is then split 70/30 into training and test sets (7,000 and 3,000 customers respectively), and the target variable Exited is separated from the predictor columns. This is standard setup before fitting any classifier — you never want the label leaking into the features.
+
+A Naïve Bayes model is trained using the naivebayes package with Laplace smoothing set to 1, which prevents the model from assigning zero probability to categories it didn't see during training. The model output summarizes the conditional distributions it learned — things like the average age, balance, and credit score of churners vs. stayers, and the frequency breakdown of categorical variables like country and gender within each class. These learned distributions are what the model uses to make predictions.
+
+Predictions are then generated on the test set in two forms: hard class labels and probability scores for each class. The probability output is particularly useful — rather than just a binary "churned/stayed" label, you get a confidence score for each customer, which is far more actionable in practice.
+
+Finally, a cross-table and manually computed metrics summarize model performance. The confusion matrix shows the model correctly classified most customers overall, driving an 83% accuracy. But drilling into recall — only about 31% — reveals the real weakness: the model misses the vast majority of actual churners, flagging them incorrectly as staying. The F1 score of roughly 42% reflects this. The final results table ties it all together by appending predicted labels and churn probabilities back onto each test customer, enabling a risk-ranked view of who is most likely to leave.
+
+## Ensemble
+
+Combining the two models could potentially improve the overall performance. We will create an ensemble and compare the results.
+
+### Training
+
+```{r}
+set.seed(235)
+
+ctrl_stack <- trainControl(
+  method = "repeatedcv",
+  repeats = 3,
+  classProbs = TRUE,
+  savePredictions = "final",
+  summaryFunction = twoClassSummary
+)
+
+model_list <- caretList(
+  Exited ~ .,
+  data = train_data,
+  tuneList = list(
+    ranger = caretModelSpec(method = "ranger", tuneGrid = grid_rf,
+                            trControl = rfctrl, metric = "Sens"),
+    naive_bayes = caretModelSpec(method = "naive_bayes", tuneGrid = nb_grid,
+                                 trControl = nbctrl, metric = "Sens")
+  )
+)
+
+ensemble_model <- caretStack(
+  model_list,
+  method = "glm",
+  trControl = ctrl_stack,
+  metric = "Sens"
+)
+
+preds <- predict(ensemble_model, newdata = test_data)
+preds <- factor(ifelse(preds[, "X1"] > 0.5, "X1", "X0"),
+                levels = levels(test_data$Exited))
+enc <- confusionMatrix(preds, test_data$Exited, positive = "X1")
+```
+
+## Performance Comparison
+
+```{r}
+#| echo: false
+
+results <- data.frame(
+  RF = c(rfc$overall['Accuracy'], rfc$overall['Kappa'],
+         rfc$byClass['Sensitivity'], rfc$byClass['Specificity']),
+  NB = c(nbc2$overall['Accuracy'], nbc2$overall['Kappa'], 
+         nbc2$byClass['Sensitivity'], nbc2$byClass['Specificity']),
+  ENS = c(enc$overall['Accuracy'], enc$overall['Kappa'], 
+          enc$byClass['Sensitivity'], enc$byClass['Specificity'])
+)
+
+stargazer(results, type = "text", summary = FALSE, 
+          title = "Comparison of Model Performance")
+```
+
+The above output compares the performance of the two different algorithms and the ensemble. We see that random forest and the ensemble had almost identical performance across all four metrics, so creating an ensemble with these two algorithms is not significantly improving performance and thus is unnecessary. Random forest performed substantially better than Naive Bayes, though. Both algorithms had fairly strong values for accuracy and specificity, but random forest had much higher specificity and kappa. The kappa level of .341 for Naive Bayes indicates fair performance, but it is not very impressive. Random forest has a kappa of .521, which isn't extraordinary by any means, but indicates that it would be relatively effective in application, especially in comparison to Naive Bayes. Thus, we will move forward with random forest as our algorithm of choice and conduct further analysis for the poster to optimize the algorithm's performance.
+
+## CRediT Statement
+
+Project: Customer Churn Prediction Model using Classification Algorithms in Caret
+
+Evan: Algorithm selection and planning, data cleaning, implementation and analysis of Random Forest, ensemble implementation, algorithm comparison. Algorithm interpretation and explanation for poster. Analysis and interpretation of performance metrics within applied business context.
+
+Jake: Data cleaning and implementation of Naive Bayes. Analysis of Naive Bayes implementation and methodology. Explanation of results within business context and analysis of overall performance/future direction. Final poster review and editing.
+
+Jack: Output visualization (creating clean and understandable plots using ggplot2) for Random Forest and Naive Bayes. Explanations of plots and other visuals.
