@@ -113,13 +113,12 @@ meaningfully correlated in practice.
 
 ## Contributors
 
-Evan: Algorithm selection and planning, data cleaning, implementation and analysis of Random Forest,
+Evan Scheuermann: Algorithm selection and planning, data cleaning, implementation and analysis of Random Forest,
 ensemble implementation, algorithm comparison. Algorithm interpretation and explanation for poster.
 Analysis and interpretation of performance metrics within applied business context.
 
-Jake: Data cleaning and implementation of Naive Bayes. Analysis of Naive Bayes implementation and methodology.
+Jake Scheidelman: Data cleaning and implementation of Naive Bayes. Analysis of Naive Bayes implementation and methodology.
 Explanation of results within business context and analysis of overall performance/future direction.
 Final poster review and editing.
 
-Jack: Output visualization (creating clean and understandable plots using ggplot2) for Random Forest and Naive Bayes.
-Explanations of plots and other visuals.
+Jack Tamburino: Output visualization (creating clean and understandable plots using ggplot2) for Random Forest and Naive Bayes. Explanations of plots and other visuals.
