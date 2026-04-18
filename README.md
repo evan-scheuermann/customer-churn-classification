@@ -69,13 +69,13 @@ analysis yielded:
 - **Sensitivity:** 84.3%
 - **Specificity:** 75.4%
 
-![](figures/roccurve.png)
+![Random Forest ROC Curve](figures/roccurve.png)
 
 ### Top Predictors (Random Forest)
 Age, Balance, and Estimated Salary were the three most important features,
 followed by Credit Score, Number of Products, and Tenure.
 
-![](figures/varimpviz.png)
+![Random Forest Variable Importance Plot](figures/varimpviz.png)
 
 ## Recommendation
 
